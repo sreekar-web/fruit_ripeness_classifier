@@ -41,6 +41,6 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            kubectl set image deployment/fruit-classifier \
+            sudo kubectl set image deployment/fruit-classifier \
               fruit-classifier=${{ env.IMAGE }}
-            kubectl rollout status deployment/fruit-classifier
+            sudo kubectl rollout status deployment/fruit-classifier
