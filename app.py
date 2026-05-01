@@ -13,6 +13,8 @@ from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import base64
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fruit_ripeness_classifier"))
 from src.model import FruitRipenessClassifier
@@ -22,6 +24,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Fruit Ripeness Classifier API")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    with open("static/index.html") as f:
+        return f.read()
 
 CLASS_NAMES = ["ripe", "rotten", "unripe"]
 
@@ -138,7 +146,8 @@ async def predict(file: UploadFile = File(...)):
 @app.post("/predict-with-gradcam")
 async def predict_with_gradcam(file: UploadFile = File(...)):
     """
-    Same as /predict but also returns a base64 Grad-CAM overlay image.
+    Same as /predict but also returns base64 original image,
+    Grad-CAM heatmap, and overlay image.
     """
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
@@ -163,7 +172,22 @@ async def predict_with_gradcam(file: UploadFile = File(...)):
     target_layer = model.block3[0]
     gradcam      = GradCAM(model, target_layer)
     cam, _       = gradcam.generate(input_tensor.to(device))
-    overlay_b64  = overlay_heatmap(image, cam)
+
+    # Original image as base64
+    original_resized = image.resize((224, 224))
+    buf = io.BytesIO()
+    original_resized.save(buf, format="PNG")
+    original_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    # Raw heatmap as base64
+    heatmap_arr = np.uint8(255 * cm.jet(cam)[:, :, :3])
+    heatmap_img = Image.fromarray(heatmap_arr).resize((224, 224))
+    buf = io.BytesIO()
+    heatmap_img.save(buf, format="PNG")
+    heatmap_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    # Overlay as base64
+    overlay_b64 = overlay_heatmap(image, cam)
 
     log_prediction_to_dynamo(file.filename, predicted_class, confidence, all_scores)
 
@@ -171,5 +195,7 @@ async def predict_with_gradcam(file: UploadFile = File(...)):
         "predicted_class":  predicted_class,
         "confidence":       round(confidence * 100, 2),
         "all_scores":       {k: round(v * 100, 2) for k, v in all_scores.items()},
+        "original_image":   original_b64,
+        "gradcam_heatmap":  heatmap_b64,
         "gradcam_overlay":  overlay_b64
     })
